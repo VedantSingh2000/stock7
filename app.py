@@ -8,78 +8,50 @@ import plotly.graph_objects as go
 from pandas import Timestamp
 import glob
 import os
-import requests # Import the requests library
+import gdown # Import gdown library
 
-# --- Configuration for Google Drive Download ---
-# Google Drive File ID for multi_stock_models.pkl
-GOOGLE_DRIVE_FILE_ID = "1tR8pR4miv5Gfbvd5bxurBdIshUvhkRBp"
-# Constructed direct download URL
-GOOGLE_DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={GOOGLE_DRIVE_FILE_ID}"
-LOCAL_MODELS_FILENAME = "multi_stock_models.pkl"
+# --- Google Drive File ID for the large models file ---
+# IMPORTANT: Make sure this file is publicly accessible (Anyone with the link -> Viewer)
+MODELS_FILE_ID = "1tR8pR4miv5Gfbvd5bxurBdIshUvhkRBp" 
 
-# --- Function to download file from Google Drive ---
-@st.cache_resource
-def download_file_from_google_drive(file_id, destination):
-    """
-    Downloads a file from Google Drive to a specified local destination.
-    Uses a direct download link.
-    """
-    st.info(f"⏳ Downloading {destination} from Google Drive...")
-    try:
-        response = requests.get(GOOGLE_DRIVE_DOWNLOAD_URL, stream=True)
-        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+# --- Function to download files from Google Drive ---
+@st.cache_resource(ttl=3600) # Cache the download to avoid re-downloading on every rerun
+def download_from_google_drive(file_id, output_path):
+    """Downloads a file from Google Drive given its file ID."""
+    if not os.path.exists(output_path):
+        try:
+            st.info(f"Downloading {output_path} from Google Drive...")
+            gdown.download(id=file_id, output=output_path, quiet=False)
+            st.success(f"Successfully downloaded {output_path}.")
+        except Exception as e:
+            st.error(f"❌ Error downloading {output_path} from Google Drive: {e}. Please check the file ID and sharing permissions.")
+            st.stop()
+    else:
+        st.info(f"{output_path} already exists. Skipping download.")
 
-        # Handle Google Drive's virus scan warning for large files
-        if "confirm" in response.url:
-            id_match = re.search(r"id=([\w-]+)", response.url)
-            if id_match:
-                file_id = id_match.group(1)
-                download_url = f"https://drive.google.com/uc?export=download&confirm=t&id={file_id}"
-                response = requests.get(download_url, stream=True)
-                response.raise_for_status()
+# --- Ensure models file is downloaded before loading ---
+download_from_google_drive(MODELS_FILE_ID, "multi_stock_models.pkl")
 
-        with open(destination, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        st.success(f"✅ Downloaded {destination} successfully.")
-        return True
-    except Exception as e:
-        st.error(f"❌ Error downloading {destination} from Google Drive: {e}")
-        return False
+# --- Define paths for all files ---
+# multi_stock_models.pkl will be downloaded
+models_file = "multi_stock_models.pkl"
+# Other files are expected to be in the same Git repository
+scalers_file = "multi_stock_scalers.pkl"
+errors_file = "multi_stock_errors.pkl"
+backtest_file = "multi_stock_backtest.pkl" 
 
-# --- Initial Download Call (runs only once per Streamlit Cloud deployment) ---
-# Ensure models file is downloaded before trying to load it
-if not os.path.exists(LOCAL_MODELS_FILENAME):
-    download_success = download_file_from_google_drive(GOOGLE_DRIVE_FILE_ID, LOCAL_MODELS_FILENAME)
-    if not download_success:
-        st.error("Could not download necessary model files. Please check the Google Drive link or file permissions.")
-        st.stop() # Stop the app if download fails
-
-# --- Load Latest Files ---
-def get_latest_file(pattern):
-    """Finds the most recently modified file matching a pattern."""
-    files = glob.glob(pattern)
-    if not files:
-        return None
-    return max(files, key=os.path.getctime)
-
-# Now models_file points to the locally downloaded file
-models_file = LOCAL_MODELS_FILENAME 
-scalers_file = get_latest_file("multi_stock_scalers.pkl")
-errors_file = get_latest_file("multi_stock_errors.pkl")
-backtest_file = get_latest_file("multi_stock_backtest.pkl") 
-
-if not (models_file and scalers_file and errors_file):
-    st.error("❌ Required model/scaler/error files not found even after download attempt. Please check your repository and Google Drive.")
+# --- Check if all necessary files exist (downloaded or from Git) ---
+if not (os.path.exists(models_file) and os.path.exists(scalers_file) and os.path.exists(errors_file)):
+    st.error("❌ Required model/scaler/error files not found. Ensure 'multi_stock_models.pkl' is downloadable from Google Drive and others are committed to your Git repository.")
     st.stop()
 
 try:
     models = joblib.load(models_file)
     scalers = joblib.load(scalers_file)
     errors = joblib.load(errors_file)
-    backtest = joblib.load(backtest_file) if backtest_file else {}
+    backtest = joblib.load(backtest_file) if os.path.exists(backtest_file) else {}
 except Exception as e:
-    st.error(f"❌ Error loading model/data files: {e}. Ensure all files are valid pickle files and accessible.")
+    st.error(f"❌ Error loading model/data files: {e}. Ensure all files are valid pickle files and accessible. If running on Streamlit Cloud, ensure 'scikit-learn' is in your requirements.txt!")
     st.stop()
 
 # --- App Config and Style ---
@@ -152,7 +124,7 @@ st.markdown("""
     }
     .accuracy-green { background-color: #2e7d32; } /* Dark green */
     .accuracy-red { background-color: #c62828; } /* Dark red */
-    .accuracy-blue { background-color: #007bb6; } /* Blue for backtest MAE */
+    .accuracy-blue { background-color: #007bb6; } /* Blue for general MAE display */
 
     /* Streamlit widgets styling */
     .stSelectbox > div > div > div, .stTextInput > div > div > input, .stRadio > label, .stCheckbox > label {
@@ -184,6 +156,11 @@ st.markdown("""
         overflow: hidden; /* Ensures content stays within rounded corners */
         box-shadow: 0 4px 8px rgba(0,0,0,0.3); /* Added shadow for all dataframes */
     }
+    /* Target cells within the dataframe for styling */
+    .stDataFrame table td, .stDataFrame table th { /* Added th here */
+        vertical-align: middle; /* Align content vertically in the middle */
+        text-align: center; /* Center text horizontally */
+    }
     .stDataFrame table { /* Target the table inside the dataframe */
         color: #FFFFFF !important; /* Ensure text color within table */
     }
@@ -210,10 +187,6 @@ st.markdown("""
         font-size: 1.2em; /* Larger header font for this table */
     }
     
-    /* Styling for backtest table errors */
-    .error-small { color: #4CAF50; font-weight: bold; } /* Green for small errors */
-    .error-large { color: #F44336; font-weight: bold; } /* Red for large errors */
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -228,18 +201,21 @@ tickers = {
 }
 selected_ticker = st.sidebar.selectbox("Choose a stock:", list(tickers.keys()), format_func=lambda x: tickers[x])
 manual_open = st.sidebar.text_input("**(Optional) Enter today's Open price (₹):**", value="")
-date_range = st.sidebar.selectbox("**Select Date Range for Chart:**", ["1M", "3M", "6M", "1Y", "5Y"], index=4)
-chart_type = st.sidebar.radio("**Select Chart Type:**", options=["Line Chart", "Candlestick"], index=0)
-show_chart = st.sidebar.checkbox("📊 Show Price Chart", value=False)
-backtest_mode = st.sidebar.checkbox("📈 Show Backtest Last Month", value=False)
+# Removed chart-related sidebar options
+# date_range = st.sidebar.selectbox("**Select Date Range for Chart:**", ["1M", "3M", "6M", "1Y", "5Y"], index=4)
+# chart_type = st.sidebar.radio("**Select Chart Type:**", options=["Line Chart", "Candlestick"], index=0)
+# show_chart = st.sidebar.checkbox("📊 Show Price Chart", value=False)
+# Checkbox to control display of the backtest table
+backtest_mode = st.sidebar.checkbox("📈 Show Backtest Results (Last 60 Days)", value=False) 
+# Checkbox for showing original MAE
+show_original_mae = st.sidebar.checkbox("ℹ️ Show Original Model MAE (from training)", value=False)
 
 # --- Fetch Data ---
 @st.cache_data(ttl=3600)
-def get_data(ticker, range_key):
+def get_data(ticker, period_key="1y"): # Changed to default to 1 year period for data fetching
     end_date = datetime.now()
-    start_dict = {"1M": 30, "3M": 90, "6M": 180, "1Y": 365, "5Y": 1825}
-    days = start_dict.get(range_key, 1825)
-    start_date = end_date - timedelta(days=days)
+    # Using a fixed period for data fetching as chart date range is removed
+    start_date = end_date - timedelta(days=365) # Fetch 1 year of data by default
     
     try:
         data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True)
@@ -268,7 +244,8 @@ def create_features(df):
 
 # --- Prediction Logic ---
 with st.spinner("🔄 Fetching data and generating predictions..."):
-    df = get_data(selected_ticker, date_range)
+    # Call get_data without date_range, using default period
+    df = get_data(selected_ticker) 
 
     if df.empty:
         st.stop()
@@ -321,14 +298,72 @@ with st.spinner("🔄 Fetching data and generating predictions..."):
     pred_high_price = open_price_for_prediction * (1 + raw_high / 100)
     pred_low_price = open_price_for_prediction * (1 + raw_low / 100)
 
-    err = errors[selected_ticker]
-    mae_open = err['open']['mae']
-    mae_close = err['close']['mae']
-    mae_high = err['high']['mae'] if 'high' in err else 0.0
-    mae_low = err['low']['mae'] if 'low' in err else 0.0
+    # --- Initialize MAE values for display (DEFAULT to Backtest MAE for last 60 days) ---
+    display_mae_open = 0.0
+    display_mae_close = 0.0
+    display_mae_high = 0.0
+    display_mae_low = 0.0
 
-    target = pred_high_price - mae_high
-    stop_loss = pred_low_price + mae_low
+    # Attempt to load and calculate MAE from last 60 days of backtest data
+    if selected_ticker in backtest and backtest[selected_ticker]:
+        try:
+            bt_data_for_mae_calc = pd.DataFrame(backtest[selected_ticker])
+            bt_data_for_mae_calc['Date'] = pd.to_datetime(bt_data_for_mae_calc['Date'])
+            
+            # Filter for the last 60 days of backtest data for MAE calculation
+            end_date_bt = bt_data_for_mae_calc['Date'].max()
+            start_date_bt = end_date_bt - timedelta(days=60)
+            bt_data_for_mae_calc = bt_data_for_mae_calc[bt_data_for_mae_calc['Date'] >= start_date_bt]
+
+            if not bt_data_for_mae_calc.empty:
+                temp_err_df = bt_data_for_mae_calc['Errors'].apply(pd.Series)
+                expected_inner_cols_err = ['open', 'close', 'high', 'low']
+                
+                if all(col in temp_err_df.columns for col in expected_inner_cols_err):
+                    if not temp_err_df['open'].dropna().empty:
+                        display_mae_open = temp_err_df['open'].abs().mean()
+                    if not temp_err_df['close'].dropna().empty:
+                        display_mae_close = temp_err_df['close'].abs().mean()
+                    if not temp_err_df['high'].dropna().empty:
+                        display_mae_high = temp_err_df['high'].abs().mean()
+                    if not temp_err_df['low'].dropna().empty:
+                        display_mae_low = temp_err_df['low'].abs().mean()
+                    st.info(f"Defaulting to Backtest MAE (last 60 days) for display (e.g., Open MAE: ₹{display_mae_open:.2f}).")
+                else:
+                    st.warning("⚠️ Backtest error data structure mismatch for MAE calculation. Defaulting to original model MAE.")
+                    # Fallback to original model MAE if backtest structure is bad
+                    err_original = errors[selected_ticker]
+                    display_mae_open = err_original['open']['mae']
+                    display_mae_close = err_original['close']['mae']
+                    display_mae_high = err_original['high']['mae'] if 'high' in err_original else 0.0
+                    display_mae_low = err_original['low']['mae'] if 'low' in err_original else 0.0
+            else:
+                st.warning("⚠️ Backtest data is empty for the last 60 days. Defaulting to original model MAE.")
+                # Fallback to original model MAE if backtest data is empty
+                err_original = errors[selected_ticker]
+                display_mae_open = err_original['open']['mae']
+                display_mae_close = err_original['close']['mae']
+                display_mae_high = err_original['high']['mae'] if 'high' in err_original else 0.0
+                display_mae_low = err_original['low']['mae'] if 'low' in err_original else 0.0
+        except Exception as e:
+            st.warning(f"Could not calculate backtest MAE for display due to an error: {e}. Defaulting to original model MAE.")
+            # Fallback to original model MAE if an error occurs during backtest MAE calculation
+            err_original = errors[selected_ticker]
+            display_mae_open = err_original['open']['mae']
+            display_mae_close = err_original['close']['mae']
+            display_mae_high = err_original['high']['mae'] if 'high' in err_original else 0.0
+            display_mae_low = err_original['low']['mae'] if 'low' in err_original else 0.0
+    else:
+        st.warning("⚠️ No backtest data found for selected stock. Defaulting to original model MAE.")
+        # Fallback to original model MAE if no backtest data at all
+        err_original = errors[selected_ticker]
+        display_mae_open = err_original['open']['mae']
+        display_mae_close = err_original['close']['mae']
+        display_mae_high = err_original['high']['mae'] if 'high' in err_original else 0.0
+        display_mae_low = err_original['low']['mae'] if 'low' in err_original else 0.0
+
+    target = pred_high_price - display_mae_high
+    stop_loss = pred_low_price + display_mae_low
     margin_range = target - stop_loss
     optimal_margin_abs = pred_high_price - pred_low_price
     optimal_margin_pct = (optimal_margin_abs / pred_open_price) * 100 if pred_open_price else 0
@@ -357,10 +392,10 @@ with st.spinner("🔄 Fetching data and generating predictions..."):
         <div class="prediction-highlight">
             <h3>🎯 Predictions:</h3>
             <ul>
-                <li><b>Predicted Open:</b> <span class="{open_color}">₹{pred_open_price:.2f}</span> ± ₹{mae_open:.2f}</li>
-                <li><b>Predicted Close:</b> <span class="{close_color}">₹{pred_close_price:.2f}</span> ± ₹{mae_close:.2f}</li>
-                <li><b>Predicted High:</b> <span class="{high_color}">₹{pred_high_price:.2f}</span> ± ₹{mae_high:.2f}</li>
-                <li><b>Predicted Low:</b> <span class="{low_color}">₹{pred_low_price:.2f}</span> ± ₹{mae_low:.2f}</li>
+                <li><b>Predicted Open:</b> <span class="{open_color}">₹{pred_open_price:.2f}</span> ± ₹{display_mae_open:.2f}</li>
+                <li><b>Predicted Close:</b> <span class="{close_color}">₹{pred_close_price:.2f}</span> ± ₹{display_mae_close:.2f}</li>
+                <li><b>Predicted High:</b> <span class="{high_color}">₹{pred_high_price:.2f}</span> ± ₹{display_mae_high:.2f}</li>
+                <li><b>Predicted Low:</b> <span class="{low_color}">₹{pred_low_price:.2f}</span> ± ₹{display_mae_low:.2f}</li>
             </ul>
         </div>""", unsafe_allow_html=True)
 
@@ -372,7 +407,7 @@ with st.spinner("🔄 Fetching data and generating predictions..."):
                 <li><b>Target:</b> ₹{target:.2f}</li>
                 <li><b>Stop Loss:</b> ₹{stop_loss:.2f}</li>
                 <li><b>Optimal Margin:</b> ₹{optimal_margin_abs:.2f} ({optimal_margin_pct:.2f}%)</li>
-                <li><b>Min Margin:</b> ₹{margin_range:.2f} ({min_margin_pct:.2f}%)</li>
+                <li><b>Min Margin:</b> ₹{min_margin_pct:.2f}%)</li>
             </ul>
         </div>""", unsafe_allow_html=True)
 
@@ -395,179 +430,164 @@ with st.spinner("🔄 Fetching data and generating predictions..."):
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-    # --- Accuracy Display Redesign ---
-    acc_open = 100 - mae_open
-    acc_close = 100 - mae_close
-    acc_high = 100 - mae_high
-    acc_low = 100 - mae_low
+    # --- Display Original Model MAE (Optional) ---
+    if show_original_mae:
+        st.subheader("ℹ️ Original Model Accuracy (Percentage & MAE from training data)")
+        original_err = errors[selected_ticker]
 
-    st.subheader("✅ Model Accuracy (100 - MAE)")
-    col_acc_top1, col_acc_top2 = st.columns(2)
-    col_acc_bottom1, col_acc_bottom2 = st.columns(2)
+        # Calculate percentage accuracy based on predicted price and the original MAE
+        original_acc_high_pct = (100 - (original_err['high']['mae'] / pred_high_price * 100)) if pred_high_price else 0
+        original_acc_low_pct = (100 - (original_err['low']['mae'] / pred_low_price * 100)) if pred_low_price else 0
+        original_acc_open_pct = (100 - (original_err['open']['mae'] / pred_open_price * 100)) if pred_open_price else 0
+        original_acc_close_pct = (100 - (original_err['close']['mae'] / pred_close_price * 100)) if pred_close_price else 0
 
-    with col_acc_top1:
-        st.markdown(f"""
-        <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
-            <div class="accuracy-block accuracy-green"><b>High:</b><br>{acc_high:.2f}% ± ₹{mae_high:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_acc_top2:
-        st.markdown(f"""
-        <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
-            <div class="accuracy-block accuracy-red"><b>Low:</b><br>{acc_low:.2f}% ± ₹{mae_low:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_acc_bottom1:
-        st.markdown(f"""
-        <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
-            <div class="accuracy-block accuracy-green"><b>Open:</b><br>{acc_open:.2f}% ± ₹{mae_open:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_acc_bottom2:
-        st.markdown(f"""
-        <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
-            <div class="accuracy-block accuracy-red"><b>Close:</b><br>{acc_close:.2f}% ± ₹{mae_close:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        col_acc_top1, col_acc_top2 = st.columns(2)
+        col_acc_bottom1, col_acc_bottom2 = st.columns(2)
 
-    # Adding a small gap between accuracy blocks and the next section
-    st.markdown("<br>", unsafe_allow_html=True)
+        with col_acc_top1:
+            st.markdown(f"""
+            <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
+                <div class="accuracy-block accuracy-green"><b>High:</b><br>₹{original_err['high']['mae'] if 'high' in original_err else 0.0:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_acc_top2:
+            st.markdown(f"""
+            <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
+                <div class="accuracy-block accuracy-red"><b>Low:</b><br>₹{original_err['low']['mae'] if 'low' in original_err else 0.0:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_acc_bottom1:
+            st.markdown(f"""
+            <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
+                <div class="accuracy-block accuracy-green"><b>Open:</b><br>₹{original_err['open']['mae']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_acc_bottom2:
+            st.markdown(f"""
+            <div style="padding: 10px; background-color: #1f1f1f; border-radius: 8px; text-align: center;">
+                <div class="accuracy-block accuracy-red"><b>Close:</b><br>₹{original_err['close']['mae']:.2f}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
 
-
-    if show_chart:
-        st.subheader("📊 Historical Price Chart with Next Day Prediction")
-        chart_df = df[['Open', 'High', 'Low', 'Close']].copy()
-        chart_df.loc[Timestamp(future_day)] = [pred_open_price, pred_high_price, pred_low_price, pred_close_price]
-        chart_df.sort_index(inplace=True)
-
-        fig = go.Figure()
-        if chart_type == "Candlestick":
-            fig.add_trace(go.Candlestick(
-                x=chart_df.index,
-                open=chart_df['Open'],
-                high=chart_df['High'],
-                low=chart_df['Low'],
-                close=chart_df['Close'],
-                name='Candlestick',
-                increasing_line_color= '#4CAF50',  # Green for increasing
-                decreasing_line_color= '#F44336' # Red for decreasing
-            ))
-        else:
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['Open'], mode='lines', name='Open Price', line=dict(color='#ADD8E6')))
-            fig.add_trace(go.Scatter(x=chart_df.index, y=chart_df['Close'], mode='lines', name='Close Price', line=dict(color='#FFD700')))
-            
-        # Add highlight for the predicted day
-        if pd.Timestamp(future_day) in chart_df.index:
-            fig.add_vline(x=pd.Timestamp(future_day), line_width=2, line_dash="dash", line_color="#00acc1",
-                          annotation_text=f"Predicted Day: {future_day.strftime('%Y-%m-%d')}", annotation_position="top right",
-                          annotation_font_color="white")
-
-
-        fig.update_layout(
-            title=f"{tickers[selected_ticker]} Stock Price Chart",
-            xaxis_title="Date",
-            yaxis_title="Price (₹)",
-            hovermode="x unified",
-            xaxis=dict(tickformat="%Y-%m-%d", rangeslider_visible=True),
-            plot_bgcolor="#1e1e1e",
-            paper_bgcolor="#1e1e1e",
-            font=dict(color="white"),
-            margin=dict(l=40, r=40, t=60, b=40),
-            legend=dict(x=0.01, y=0.99, bgcolor='rgba(0,0,0,0)', bordercolor='rgba(0,0,0,0)', font=dict(color='white'))
-        )
-        st.plotly_chart(fig, use_container_width=True)
 
     if backtest_mode and selected_ticker in backtest:
-        st.subheader("🔢 Backtest Results (Last 30 Days)")
+        st.subheader("🔢 Backtest Results (Last 60 Days)") # Changed title to reflect 60 days
+        
+        # Load backtest data into a DataFrame
         bt = pd.DataFrame(backtest[selected_ticker])
 
-        if bt.empty:
-            st.warning(f"⚠️ Backtest data for {tickers[selected_ticker]} is empty. No results to display.")
+        # Convert 'Date' column to datetime objects
+        bt['Date'] = pd.to_datetime(bt['Date'])
+
+        # Filter for the last 60 days for display in the backtest table
+        end_date_display = bt['Date'].max()
+        start_date_display = end_date_display - timedelta(days=60)
+        bt_filtered_for_display = bt[bt['Date'] >= start_date_display].sort_values(by='Date', ascending=True) # Sort by date
+
+        if bt_filtered_for_display.empty:
+            st.warning(f"⚠️ Backtest data for {tickers[selected_ticker]} is empty for the last 60 days. No results to display.")
         else:
-            def expand_cols(df, col):
-                return pd.DataFrame(df[col].tolist(), index=df.index)
+            # Check if 'Predictions', 'Actuals', 'Errors' columns exist and are dictionaries
+            if all(col in bt_filtered_for_display.columns for col in ['Predictions', 'Actuals', 'Errors']) and \
+               isinstance(bt_filtered_for_display['Predictions'].iloc[0], dict): # Check first element type
+                
+                # Expand the dictionary columns into new Dataframes
+                pred_df = bt_filtered_for_display['Predictions'].apply(pd.Series)
+                act_df = bt_filtered_for_display['Actuals'].apply(pd.Series)
+                err_df = bt_filtered_for_display['Errors'].apply(pd.Series)
 
-            bt['Date'] = pd.to_datetime(bt['Date'])
-            
-            pred_df = expand_cols(bt, 'Predictions')
-            act_df = expand_cols(bt, 'Actuals')
-            err_df = expand_cols(bt, 'Errors')
+                # Ensure the expanded DataFrames have the expected columns (open, close, high, low)
+                expected_inner_cols = ['open', 'close', 'high', 'low']
+                if not all(col in pred_df.columns for col in expected_inner_cols) or \
+                   not all(col in act_df.columns for col in expected_inner_cols) or \
+                   not all(col in err_df.columns for col in expected_inner_cols):
+                    st.error("❌ Backtest data structure mismatch: Inner dictionaries (Predictions, Actuals, Errors) do not contain expected keys (open, close, high, low). Displaying raw data for inspection.")
+                    st.dataframe(bt_filtered_for_display, use_container_width=True, height=700)
+                else:
+                    # Rename columns for clarity in the combined DataFrame
+                    pred_df.columns = [f'Pred_{col.capitalize()}' for col in expected_inner_cols]
+                    act_df.columns = [f'Actual_{col.capitalize()}' for col in expected_inner_cols]
+                    err_df.columns = [f'Error_{col.capitalize()}' for col in expected_inner_cols]
 
-            expected_cols_count = 4 
-            if (pred_df.shape[1] != expected_cols_count or 
-                act_df.shape[1] != expected_cols_count or 
-                err_df.shape[1] != expected_cols_count):
-                st.error("❌ Backtest data structure mismatch: Expected 4 columns (Open, Close, High, Low) for Predictions, Actuals, and Errors. Displaying raw data for inspection.")
-                st.dataframe(bt, use_container_width=True, height=700)
-            else:
-                pred_df.columns = ['Open', 'Close', 'High', 'Low']
-                act_df.columns = ['Open', 'Close', 'High', 'Low']
-                err_df.columns = ['Open', 'Close', 'High', 'Low']
+                    # Define the desired column order
+                    ordered_cols = ['Date']
+                    for metric in ['Open', 'Close', 'High', 'Low']:
+                        ordered_cols.append(f'Actual_{metric}')
+                        ordered_cols.append(f'Pred_{metric}')
+                        ordered_cols.append(f'Error_{metric}')
 
-                combined_df = pd.DataFrame({
-                    'Date': bt['Date'],
-                    'Actual_Open': act_df['Open'],
-                    'Pred_Open': pred_df['Open'],
-                    'Error_Open': err_df['Open'],
-                    'Actual_Close': act_df['Close'],
-                    'Pred_Close': pred_df['Close'],
-                    'Error_Close': err_df['Close'],
-                    'Actual_Low': act_df['Low'],
-                    'Pred_Low': pred_df['Low'],
-                    'Error_Low': err_df['Low'],
-                    'Actual_High': act_df['High'],
-                    'Pred_High': pred_df['High'],
-                    'Error_High': err_df['High'],
-                })
+                    # Combine all into a single DataFrame and reorder columns
+                    combined_df = pd.concat([bt_filtered_for_display['Date'], act_df, pred_df, err_df], axis=1)[ordered_cols]
 
-                ordered_cols = [
-                    'Date',
-                    'Actual_Open', 'Pred_Open', 'Error_Open',
-                    'Actual_Close', 'Pred_Close', 'Error_Close',
-                    'Actual_Low', 'Pred_Low', 'Error_Low',
-                    'Actual_High', 'Pred_High', 'Error_High',
-                ]
+                    # Explicitly format Date column to string and round numeric columns
+                    combined_df['Date'] = combined_df['Date'].dt.strftime('%Y-%m-%d')
+                    numeric_cols_to_format = [col for col in combined_df.columns if col not in ['Date']]
+                    combined_df[numeric_cols_to_format] = combined_df[numeric_cols_to_format].round(2)
 
-                combined_df = combined_df[ordered_cols]
+                    # --- Apply conditional styling for backtest table errors ---
+                    def highlight_backtest_errors(row):
+                        # Initialize styles Series with empty strings for no style
+                        styles = pd.Series('', index=row.index) 
+                        for col_prefix in ['Open', 'Close', 'High', 'Low']:
+                            error_col = f'Error_{col_prefix}'
+                            actual_col = f'Actual_{col_prefix}'
 
-                # --- Apply conditional styling for backtest table errors ---
-                ERROR_THRESHOLD = 1.0 # Adjust this based on what you consider a "small" vs "large" error
+                            # Ensure columns exist and values are not NaN for calculations
+                            if error_col in row.index and pd.notna(row[error_col]) and \
+                               actual_col in row.index and pd.notna(row[actual_col]):
+                                
+                                error_value = abs(row[error_col])
+                                actual_value = row[actual_col]
 
-                def highlight_error_cells(val):
-                    if pd.isna(val):
-                        return ''
-                    if abs(val) <= ERROR_THRESHOLD:
-                        return 'color: #4CAF50; font-weight: bold;' # Green for small error
-                    else:
-                        return 'color: #F44336; font-weight: bold;' # Red for large error
+                                # Apply full CSS style string based on error logic
+                                if actual_value != 0: # Avoid division by zero
+                                    if error_value >= 0.01 * actual_value: # Red if error is >= 1% of actual value
+                                        styles[error_col] = 'background-color: #641E16; color: white; font-weight: bold;'  # Dark Red
+                                    elif error_value >= 2.0: # Blue if error is >= ₹2.0 but < 1% of actual value
+                                        styles[error_col] = 'background-color: #154360; color: white; font-weight: bold;'  # Dark Blue
+                                    else: # Green if error is < ₹2.0
+                                        styles[error_col] = 'background-color: #145A32; color: white; font-weight: bold;' # Dark Green
+                                else: # Handle case where actual_value is 0 (unlikely for stock prices, but for robustness)
+                                    if error_value > 0: # Any error on 0 actual is considered large
+                                        styles[error_col] = 'background-color: #641E16; color: white; font-weight: bold;' # Dark Red
+                                    else: # Error is also 0
+                                        styles[error_col] = 'background-color: #145A32; color: white; font-weight: bold;' # Dark Green (Perfect prediction on 0 actual)
+                        return styles
+                        
+                    # Apply styling by returning full CSS style strings (axis=1 applies function row-wise)
+                    styled_df = combined_df.style \
+                        .apply(highlight_backtest_errors, axis=1) \
+                        .format({col: "₹{}" for col in numeric_cols_to_format}) # Apply currency symbol after rounding
                     
-                styled_df = combined_df.style \
-                    .applymap(highlight_error_cells, subset=['Error_Open', 'Error_Close', 'Error_High', 'Error_Low']) \
-                    .format({col: "₹{:.2f}" for col in combined_df.columns if col != 'Date'})
-                
-                st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    height=700
-                )
+                    st.dataframe(
+                        styled_df,
+                        use_container_width=True,
+                        height=700
+                    )
 
-                # --- Calculate and Display Backtest MAE ---
-                st.markdown("<br>", unsafe_allow_html=True) # Add some space
-                st.subheader("📊 Backtest Mean Absolute Error (MAE)")
-                
-                backtest_mae_open = err_df['Open'].abs().mean() if not err_df['Open'].empty else 0.0
-                backtest_mae_close = err_df['Close'].abs().mean() if not err_df['Close'].empty else 0.0
-                backtest_mae_high = err_df['High'].abs().mean() if not err_df['High'].empty else 0.0
-                backtest_mae_low = err_df['Low'].abs().mean() if not err_df['Low'].empty else 0.0
+                    # --- Calculate and Display Backtest MAE for the backtest section ---
+                    st.markdown("<br>", unsafe_allow_html=True) # Add some space
+                    st.subheader("📊 Backtest Mean Absolute Error (Last 60 Days)")
+                    
+                    # Corrected: Use the RENAMED columns for MAE calculation
+                    backtest_mae_open_display = err_df['Error_Open'].abs().mean() if not err_df['Error_Open'].dropna().empty else 0.0
+                    backtest_mae_close_display = err_df['Error_Close'].abs().mean() if not err_df['Error_Close'].dropna().empty else 0.0
+                    backtest_mae_high_display = err_df['Error_High'].abs().mean() if not err_df['Error_High'].dropna().empty else 0.0
+                    backtest_mae_low_display = err_df['Error_Low'].abs().mean() if not err_df['Error_Low'].dropna().empty else 0.0
 
-                st.markdown(f"""
-                <div style="display: flex; justify-content: space-around; padding: 10px; background-color: #1f1f1f; border-radius: 8px;">
-                    <div class="accuracy-block accuracy-blue"><b>Open MAE:</b><br>₹{backtest_mae_open:.2f}</div>
-                    <div class="accuracy-block accuracy-blue"><b>Close MAE:</b><br>₹{backtest_mae_close:.2f}</div>
-                    <div class="accuracy-block accuracy-blue"><b>High MAE:</b><br>₹{backtest_mae_high:.2f}</div>
-                    <div class="accuracy-block accuracy-blue"><b>Low MAE:</b><br>₹{backtest_mae_low:.2f}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div style="display: flex; justify-content: space-around; padding: 10px; background-color: #1f1f1f; border-radius: 8px;">
+                        <div class="accuracy-block accuracy-blue"><b>Open MAE:</b><br>₹{backtest_mae_open_display:.2f}</div>
+                        <div class="accuracy-block accuracy-blue"><b>Close MAE:</b><br>₹{backtest_mae_close_display:.2f}</div>
+                        <div class="accuracy-block accuracy-blue"><b>High MAE:</b><br>₹{backtest_mae_high_display:.2f}</div>
+                        <div class="accuracy-block accuracy-blue"><b>Low MAE:</b><br>₹{backtest_mae_low_display:.2f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                # Fallback to displaying raw DataFrame if structure is not as expected for expansion
+                st.warning(f"⚠️ Backtest data for {tickers[selected_ticker]} has an unexpected structure. Displaying raw data.")
+                st.dataframe(bt_filtered_for_display, use_container_width=True, height=700)
 
     elif backtest_mode and selected_ticker not in backtest:
-        st.warning(f"⚠️ No backtest data found for {tickers[selected_ticker]}. Ensure a backtest file exists and contains data for this stock.")
+        st.warning(f"⚠️ No backtest data found for {tickers[selected_ticker]} for the last 60 days. Ensure a backtest file exists and contains data for this stock.")
