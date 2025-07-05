@@ -6,3 +6,4 @@ yfinance
 plotly
 requests
 scikit-learn 
+gdown
