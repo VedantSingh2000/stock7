@@ -5,3 +5,4 @@ joblib
 yfinance
 plotly
 requests
+scikit-learn 
